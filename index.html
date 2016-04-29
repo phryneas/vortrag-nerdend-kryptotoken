@@ -1,0 +1,365 @@
+<!doctype html>
+<html>
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+        <title>(kreative) Einsatz&shy;möglichkeiten kryptografischer Token</title>
+
+        <link rel="stylesheet" href="css/reveal.css">
+        <link rel="stylesheet" href="css/theme/night.css">
+
+        <!-- Theme used for syntax highlighting of code -->
+        <link rel="stylesheet" href="lib/css/zenburn.css">
+
+        <!-- Printing and PDF exports -->
+        <script>
+            var link = document.createElement('link');
+            link.rel = 'stylesheet';
+            link.type = 'text/css';
+            link.href = window.location.search.match(/print-pdf/gi) ? 'css/print/pdf.css' : 'css/print/paper.css';
+            document.getElementsByTagName('head')[0].appendChild(link);
+        </script>
+    </head>
+    <body>
+        <div class="reveal">
+            <div class="slides">
+                <section>
+                    <h1>(kreative) Einsatz&shy;möglichkeiten kryptografischer Token</h1>
+                </section>
+                <section>
+                    <h1>oder:</h1>
+                    <h2>wie kriege ich das Passwort aus dem Token raus und ins Programm rein?</h2>
+                    <p><i>(mit möglichst viel bash)</i></p>
+                </section>
+                <section>
+                    <h1>kryptografische Token?</h1>
+                    <ul>
+                        <li>
+                            verschiedene Schnittstellen
+                            <ul>
+                                <li>Smartcard-Formfaktor</li>
+                                <li>USB</li>
+                                <li>NFC</li>
+                            </ul>
+                        </li>
+                        <li>
+                            verschiedene Standards
+                            <ul>
+                                <li>OpenPGP</li>
+                                <li>PKCS11</li>
+                                <li>PKCS15</li>
+                                <li>HMAC-SHA</li>
+                            </ul>
+                        </li>
+                    </ul>
+                </section>
+                <section>
+                    <h1>Beispiel-Implementierungen</h1>
+                    <ul>
+                        <li>OpenPGP-Smartcard</li>
+                        <li>Sigilance</li>
+                        <li>Nitrokey</li>
+                        <li>Yubikey</li>
+                        <li>Fidesmo?</li>
+                    </ul>
+                </section>
+                <section>
+                    <h1>Grundlagen</h1>
+                    <h2>OpenPGP</h2>
+                    <pre><code data-trim data-noescape class="bash">
+echo asd > test
+gpg -r B76C94DD -e -a test
+rm test
+cat test.asc
+#-----BEGIN PGP MESSAGE-----
+#Version: GnuPG v2
+#
+#hQEMA0lF8LJU85UOAQf+NyIekK8CIw7U12Dlq8Xt7xTPJCamBTN6aYOtXYsbqJ1F
+# [...]
+#=iwpb
+#-----END PGP MESSAGE-----
+gpg -q -o test -d test.asc
+cat test
+#asd
+                           </code></pre>
+                </section>
+                <section>
+                    <h1>Grundlagen</h1>
+                    <h2>OpenPGP</h2>
+                    <pre><code data-trim data-noescape class="bash">
+echo test | gpg -r B76C94DD -e -a
+#-----BEGIN PGP MESSAGE-----
+#Version: GnuPG v2
+#
+#hQEMA0lF8LJU85UOAQf+NyIekK8CIw7U12Dlq8Xt7xTPJCamBTN6aYOtXYsbqJ1F
+# [...]
+#=iwpb
+#-----END PGP MESSAGE-----
+cat &lt;&lt;EOF | gpg -q -d
+ -----BEGIN PGP MESSAGE-----
+ [...]
+ -----END PGP MESSAGE-----
+EOF
+#test
+                           </code></pre>
+                </section>
+                <section>
+                    <h1>Grundlagen</h1>
+                    <h2>OpenSSL</h2>
+                    <pre><code data-trim data-noescape class="bash">
+# zum schnellen testen: Schlüssel erzeugen
+openssl genpkey -algorithm RSA -out private.key -pkeyopt rsa_keygen_bits:2048
+openssl rsa -pubout -in private.key -out public.pem
+# verschlüsseln
+echo asd > test
+openssl pkeyutl -encrypt -in test -pubin -inkey public.pem -out test.ssl
+rm test
+# entschlüsseln
+openssl pkeyutl -decrypt -in test.ssl -inkey private.key -out test
+                           </code></pre>
+                </section>
+                <section>
+                    <h1>Grundlagen</h1>
+                    <h2>OpenSSL - mit Smartcard... und OpenSC</h2>
+                    <pre><code data-trim data-noescape class="bash">
+# bei einer Smartcard liegt vermutlich ein Zertifikat vor
+# wir brauchen einen public key
+openssl x509 -pubkey -noout -in cert.crt > public.pem
+# verschlüsseln
+echo asd > test
+openssl pkeyutl -encrypt -in test -pubin -inkey public.pem -out test.ssl
+rm test
+# entschlüsseln - OpenSC to the rescue!
+pkcs15-crypt --decipher --pkcs1 --input test.ssl --output test
+
+
+                           </code></pre>
+                </section>
+                <section>
+                    <h1>Grundlagen</h1>
+                    <h3>was hatte eigentlich HMAC-SHA in der Liste zu suchen?</h3>
+                    <ul>
+                        <li>wird z.B. vom Yubikey unterstützt</li>
+                        <li>wird z.B. von Passwort-Managern genutzt, Whitepaper von Yubico schlägt die Technik für Festplattenverschlüsselung vor</li>
+                        <li>"kreatives" Verfahren:
+                            <ul>
+                                <li>Passwortmanager generiert Wegwerf-Public-Key</li>
+                                <li>PWM generiert per HMAC-SHA mit dem Token einen privaten Schlüssel</li>
+                                <li>AES-"Master-Schlüssel" des PWM wird mit diesem privaten Schlüssel symmetrisch verschlüsselt, gemeinsam mit obigem Wegwerf-Public-Key gespeichert</li>
+                                <li>zum Entschlüsseln kann jederzeit das Private Key mit dem Token gebildet werden</li>
+                                <li>beim nächsten Re-Encrypten des PWM nimmt man einen neuen Wegwerf-Public-Key</li>
+                            </ul>
+                        </li>
+                    </ul>
+                </section>
+                <section>
+                    <h1>let's get started</h1>
+                    <p>
+                        Man nehme Software, die keine physikalischen Token unterstützt und fummelt sich was zurecht, damit es trotzdem klappt.
+                    </p>
+                    <h3>
+                        Ansätze:
+                    </h3>
+                    <ul>
+                        <li>Software erwartet Passwort per STDIN (trivial)</li>
+                        <li>Software erwartet Schlüsseldatei</li>
+                        <li>Software erwartet Passwort per Parameter (trivial, aber gefährlich. Wenn möglich: Finger weg!)</li>
+                        <li>Software erwartet interaktive Passworteingabe
+                            <ul>
+                                <li>Konsole</li>
+                                <li>GUI</li>
+                            </ul>
+                        </li>
+                    </ul>
+
+                </section>
+                <section>
+                    <h1>der Einfachkeit halber...</h1>
+                    <p>...definieren wir uns eine Funktion, die das Passwort entschlüsselt und auf STDOUT ausspuckt</p>
+                    <pre><code data-trim data-noescape class="bash">
+#!/bin/bash
+function getkey(){
+    gpg -q -d test.asc
+}
+                </code></pre>
+                    <p>
+                        irgendwie sowas in  der Art.
+                    </p>
+                    <p>
+                        zum Testen empfehle ich aber
+                    </p>
+                    <pre><code data-trim data-noescape class="bash">
+#!/bin/bash
+function getkey(){
+    echo asd
+}
+                </code></pre>
+                </section>
+                <section>
+                    <h1>Software erwartet Schlüsseldatei</h1>
+                    <p>Herausforderung:</p>
+                    <ul>
+                        <li>Datei soll nicht auf der Festplatte landen (<code>/dev/shm</code> ?)</li>
+                        <li>Datei soll möglichst nicht von anderen Nutzern gelesen werden (Unterordner mit beschränkten Rechten, nur zur Sicherheit?)</li>
+                        <li>Datei soll möglichst nicht von anderer Software gelesen werden (?)</li>
+                        <li>Datei soll möglichst nur einmal ausgelesen werden können (fifo?)</li>
+                        <li>Datei soll auf jeden Fall wieder verschwinden (trap exit?)</li>
+                    </ul>
+                </section>
+                <section>
+                    <h1>Lösungsvorschlag</h1>
+                    <h2>process substitution</h2>
+                    <pre><code data-trim data-noescape class="bash">
+#!/bin/bash
+some-program --key-file=<(getkey)
+                </code></pre>
+                    <ul>
+                        <li>Datei landet in <code>/dev/fd/X</code>
+                            <ul>
+                                <li>sollte auf <code>/proc/&lt;procid von some-program&gt;/fd/X</code> abbilden</li>
+                                <li>dürfte hoffentlich nur im Speicher landen (swapping?)</li>
+                            </ul>
+                        </li>
+                        <li>ist eine fifo</li>
+                        <li>zumindest auf meinem Testsystem sind die Rechte gut gesetzt</li>
+                        <li>sollte allgemein ohne root-Rechte nicht zu klauen sein (?)</li>
+                        <li>ist simpel, vermeidet also Fehler wenn man es statt dessen selber macht</li>
+                    </ul>
+                </section>
+                <section>
+                    <h1>Software erwartet Passwort per Parameter</h1>
+                    <ul>
+                        <li>enorm böse, da man per <code>ps</code> & co das Passwort einfach auslesen kann</li>
+                        <li>Software umschreiben</li>
+                        <li>geht nicht? Finger weg!</li>
+                        <li class="fragment">na gut... irgendwie kommt man schon drum rum - aber ich hab euch gewarnt...</li>
+                    </ul>
+                </section>
+                <section>
+                    <h1>...diese Lösung hab ich <a href="http://serverfault.com/a/592941">auf Stackoverflow</a> gefunden...</h1>
+                    <p>Man schreibt sich eine library, die man in das Programm injected, die einen auf STDIN nach dem Passwort fragt (oder die irgendwie anders an das Passwort kommt) und dann intern die originale main-Methode mit dem richtigen Passwort aufruft. Gestartet wird auf der Kommandozeile mit einem Fake-Passwort.</p>
+                    <p>aufgerufen wird es dann auf der Kommandozeile so:</p>
+                    <pre><code data-trim data-noescape class="bash">LD_PRELOAD=$PWD/injectpassword.so some-program fake-password</code></pre>
+                </section>
+                               <section>
+                    <h1>...diese Lösung hab ich <a href="http://serverfault.com/a/592941">auf Stackoverflow</a> gefunden...</h1> 
+                    <p>das wäre der Beispielcode:</p>
+<pre><code data-trim data-noescape class="c">
+#define _GNU_SOURCE
+#include &lt;dlfcn.h&gt;
+#include &lt;unistd.h&gt;
+
+static int (*real_main) (int, char * *, char * *);
+
+static int my_main(int argc, char * * argv, char * * env) {
+  char *pass = getpass(argv[argc - 1]);
+  if (pass == NULL) return 1;
+  argv[argc - 1] = pass;
+  return real_main(argc, argv, env);
+}
+
+int __libc_start_main(
+    int (*main) (int, char * *, char * *),
+    int argc, char * * ubp_av,
+    void (*init) (void),
+    void (*fini) (void),
+    void (*rtld_fini) (void),
+    void (* stack_end)
+  )
+{
+  int (*next)(
+    int (*main) (int, char * *, char * *),
+    int argc, char * * ubp_av,
+    void (*init) (void),
+    void (*fini) (void),
+    void (*rtld_fini) (void),
+    void (* stack_end)
+  ) = dlsym(RTLD_NEXT, "__libc_start_main");
+  real_main = main;
+  return next(my_main, argc, ubp_av, init, fini, rtld_fini, stack_end);
+}
+</code></pre>                
+                    <p>aber ernsthaft: simply don't do it.</p>   
+                </section>
+                <section>
+                    <h1>Software erwartet interaktive Passworteingabe auf der Konsole</h1>
+                    <p><code>expect</code> to the rescue!</p>
+                    <pre><code data-trim data-noescape class="expect">
+#!/usr/bin/expect
+eval spawn some-program
+expect "please enter password"
+send "Frikandelle\r"
+interact                    
+</code></pre>    
+                    <p>und mit einem Passwort, dass wir per command injection bekommen:</p>
+                    <pre><code data-trim data-noescape class="expect">
+#!/usr/bin/expect
+set passwordfile [lindex $argv 0]
+set fp [open $passwordfile r]
+set password [read $fp]
+close $fp
+
+eval spawn ./some-program
+expect "please enter password"
+send $password
+interact                  
+</code></pre>    
+                </section>
+                <section>
+                    <h1>Software erwartet interaktive Passworteingabe auf der GUI</h1>
+                    <ul>
+                        <li>unter Linux: xdotool</li>
+                    </ul>
+
+                            <pre><code data-trim data-noescape class="expect">
+(
+    getpass; 
+    echo #für ein Newline
+) | xdotool type \
+    --window $(xdotool search --name "Passwortabfrage" --sync | head -n 1) \
+    - #von SDTIN
+                                    </code></pre>
+                    <ul>    
+                        <li>unter Windows: Autohotkey</li>
+                    </ul>
+                </section>
+                <section>
+                    <h2>Und jetzt haben wir Zeit, uns auszutauschen und kreativ zu werden.</h2>
+                    <h1>let's hack!</h1>
+                </section>
+
+                <!--
+                <section>
+                    <h1></h1>
+                    <ul>
+                        <li></li>
+                        <li></li>
+                        <li></li>
+                    </ul>
+                </section>
+                -->
+            </div>
+        </div>
+
+
+        <script src="lib/js/head.min.js"></script>
+        <script src="js/reveal.js"></script>
+
+        <script>
+            // More info https://github.com/hakimel/reveal.js#configuration
+            Reveal.initialize({
+                history: true,
+                // More info https://github.com/hakimel/reveal.js#dependencies
+                dependencies: [
+                    {src: 'plugin/markdown/marked.js'},
+                    {src: 'plugin/markdown/markdown.js'},
+                    {src: 'plugin/notes/notes.js', async: true},
+                    {src: 'plugin/highlight/highlight.js', async: true, callback: function() {
+                            hljs.initHighlightingOnLoad();
+                        }}
+                ]
+            });
+        </script>
+    </body>
+</html>
